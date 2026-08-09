@@ -1,0 +1,128 @@
+:root {
+  color-scheme: dark;
+  --bg: #0c0d0a;
+  --fg: #cfcfc0;
+  --sub: #7a7a6c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+}
+
+main {
+  width: 100%;
+  max-width: 1900px;
+  text-align: center;
+}
+
+h1 {
+  font-size: 1.4rem;
+  margin: 0 0 0.25rem;
+  letter-spacing: 0.02em;
+}
+
+.sub {
+  margin: 0 auto 1.25rem;
+  max-width: 60ch;
+  color: var(--sub);
+  font-size: 0.9rem;
+}
+
+.sub code {
+  color: var(--fg);
+}
+
+.aviso {
+  margin: 0 auto 1.5rem;
+  max-width: 60ch;
+  padding: 0.75rem 1rem;
+  border: 1px dashed #2a2b1f;
+  border-radius: 6px;
+  background: #101107;
+  text-align: left;
+  font-size: 0.85rem;
+  color: var(--sub);
+}
+
+.aviso p {
+  margin: 0;
+}
+
+.aviso p + p {
+  margin-top: 0.6rem;
+}
+
+.panel-wrap {
+  width: 100%;
+  padding: 1rem;
+  border-radius: 6px;
+  background: #050503;
+  box-shadow: inset 0 0 0 1px #1a1a14, 0 10px 30px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
+.panel-sizer {
+  position: relative;
+  margin: 0 auto;
+}
+
+.panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  line-height: 0;
+  transform-origin: top left;
+}
+
+.panel-bg {
+  display: block;
+  image-rendering: auto;
+}
+
+.glyph {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  pointer-events: none;
+}
+
+.scroll-window {
+  position: absolute;
+  overflow: hidden;
+}
+
+.controls {
+  margin-top: 1.25rem;
+}
+
+.controls button {
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--fg);
+  background: #16170f;
+  border: 1px solid #2a2b1f;
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+
+.controls button:hover {
+  background: #1e1f16;
+}
+
+.controls button:active {
+  background: #0f100b;
+}

@@ -1,0 +1,9 @@
+# Fonte bruta usada pra extrair snd/*.opus, não faz parte do projeto (~60MB, não é nosso pra distribuir)
+youtube/
+
+# Configurações locais do Claude Code (específicas desta máquina)
+.claude/settings.local.json
+
+.DS_Store
+*~
+
