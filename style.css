@@ -64,6 +64,52 @@ h1 {
   margin-top: 0.6rem;
 }
 
+.seletor {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: center;
+  align-items: flex-end;
+  margin: 0 auto 1.5rem;
+  max-width: 70ch;
+  text-align: left;
+}
+
+.seletor .campo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  flex: 1 1 220px;
+}
+
+.seletor label {
+  font-size: 0.8rem;
+  color: var(--sub);
+}
+
+.seletor select,
+.seletor input {
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--fg);
+  background: #16170f;
+  border: 1px solid #2a2b1f;
+  border-radius: 4px;
+  padding: 0.5rem 0.6rem;
+}
+
+.letreiro-selecionado {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--sub);
+  min-height: 1.2em;
+}
+
+.letreiro-selecionado strong {
+  color: var(--fg);
+}
+
 .panel-wrap {
   width: 100%;
   padding: 1rem;

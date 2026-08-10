@@ -4,21 +4,25 @@
 // functions que validam o formato em runtime.
 
 /**
- * Resumo de uma linha e o tempo até sua próxima chegada.
+ * Resumo de uma linha e o tempo até sua próxima chegada. sentido existe
+ * porque uma linha circular (ex: 502) passa pelo mesmo letreiro em mais de
+ * um sentido — sem isso não dá pra saber qual rota buscar depois (GetLinhaRota).
  * @typedef {Object} Linha
  * @property {string} numeroLinha
  * @property {string} nomeLinha
  * @property {number} tempoChegadaMin
+ * @property {string} [sentido]
  */
 
 /**
  * @param {string} numeroLinha
  * @param {string} nomeLinha
  * @param {number} tempoChegadaMin
+ * @param {string} [sentido]
  * @returns {Linha}
  */
-function criarLinha(numeroLinha, nomeLinha, tempoChegadaMin) {
-  return { numeroLinha, nomeLinha, tempoChegadaMin };
+function criarLinha(numeroLinha, nomeLinha, tempoChegadaMin, sentido) {
+  return { numeroLinha, nomeLinha, tempoChegadaMin, sentido };
 }
 
 /**

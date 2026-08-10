@@ -171,3 +171,123 @@ document.addEventListener("DOMContentLoaded", () => {
     resizeTimer = requestAnimationFrame(fitPanel);
   });
 });
+
+// Seletor de estação/terminal (servidor/database.js): "Estação/terminal" é
+// só um filtro de tipo (as duas opções fixas), quem lista os pontos de
+// verdade é o campo de busca com autocomplete — filtrado por esse tipo, a
+// partir da mesma lista de terminais reais (listarTerminais). "Terminal" só
+// mostra pontos cujo nome contém "Terminal" (ex: Terminal Portão);
+// "Estação" mostra o resto (ex: Estação Tubo Itajubá). Um 4º campo aparece
+// quando o ponto escolhido tem mais de um letreiro (ex: Terminal Portão tem
+// um por sentido).
+async function inicializarSeletorPonto() {
+  const selectTipo = document.getElementById("selectTipo");
+  const inputPonto = document.getElementById("inputPonto");
+  const listaPontos = document.getElementById("listaPontos");
+  const campoLetreiro = document.getElementById("campoLetreiro");
+  const selectLetreiro = document.getElementById("selectLetreiro");
+  const status = document.getElementById("letreiroSelecionado");
+
+  const terminais = await listarTerminais();
+
+  // value inclui o GRUPO entre parênteses pra desempatar nomes repetidos
+  // (ex: duas "Estação Central"); grupoPorRotulo desfaz isso.
+  const grupoPorRotulo = new Map();
+
+  function popularPontos(tipo) {
+    inputPonto.value = "";
+    listaPontos.innerHTML = "";
+    grupoPorRotulo.clear();
+    campoLetreiro.hidden = true;
+    status.textContent = "";
+
+    if (!tipo) {
+      inputPonto.disabled = true;
+      return;
+    }
+
+    const ehTerminal = (nome) => /terminal/i.test(nome);
+    const filtrados = terminais.filter((t) => (tipo === "terminal" ? ehTerminal(t.nome) : !ehTerminal(t.nome)));
+
+    filtrados.forEach((t) => {
+      const rotulo = `${t.nome} (${t.grupo})`;
+      grupoPorRotulo.set(rotulo, t.grupo);
+
+      const opt = document.createElement("option");
+      opt.value = rotulo;
+      listaPontos.appendChild(opt);
+    });
+
+    inputPonto.disabled = false;
+  }
+
+  // Fecha a escolha: atualiza o texto de status e, se for de fato um
+  // letreiro diferente do que já está no ar, reseta o cliente (cliente.js)
+  // pra esse letreiro novo. A comparação com idParadaAtual evita reiniciar
+  // à toa quando o valor resolvido é igual ao que já estava rodando (ex: o
+  // preenchimento padrão abaixo, que aponta pro mesmo letreiro do boot).
+  async function selecionarLetreiro(num) {
+    const linhas = await obterLinhasDoLetreiro(num);
+    const numerosLinha = Array.from(new Set(linhas.map((l) => l.numeroLinha))).sort();
+    status.innerHTML = `Letreiro selecionado: <strong>${num}</strong> — linhas: <strong>${numerosLinha.join(", ") || "nenhuma encontrada"}</strong>`;
+
+    if (typeof ligar === "function" && num !== idParadaAtual) {
+      ligar(num);
+    }
+  }
+
+  // numPreferido (opcional): qual letreiro ativar por padrão quando o
+  // terminal tem mais de um. Se não vier, ou não existir na lista, usa o
+  // primeiro. Sem isso, o preenchimento padrão abaixo ativaria o primeiro
+  // letreiro (chamando ligar) e, um instante depois, corrigiria pro 105802
+  // (chamando ligar de novo) — dois reinícios em vez de um.
+  async function selecionarTerminal(grupo, numPreferido) {
+    const letreiros = await obterLetreirosDoTerminal(grupo);
+
+    if (letreiros.length <= 1) {
+      campoLetreiro.hidden = true;
+      if (letreiros.length === 1) await selecionarLetreiro(letreiros[0].num);
+      return;
+    }
+
+    selectLetreiro.innerHTML = "";
+    letreiros.forEach((l) => {
+      const opt = document.createElement("option");
+      opt.value = l.num;
+      opt.textContent = `${l.nome} — linhas ${l.linhas.join(", ")}`;
+      selectLetreiro.appendChild(opt);
+    });
+    campoLetreiro.hidden = false;
+
+    const existePreferido = numPreferido && letreiros.some((l) => l.num === numPreferido);
+    const numEscolhido = existePreferido ? numPreferido : letreiros[0].num;
+    selectLetreiro.value = numEscolhido;
+    await selecionarLetreiro(numEscolhido);
+  }
+
+  selectTipo.addEventListener("change", () => popularPontos(selectTipo.value));
+
+  selectLetreiro.addEventListener("change", () => {
+    selecionarLetreiro(selectLetreiro.value);
+  });
+
+  inputPonto.addEventListener("change", () => {
+    const grupo = grupoPorRotulo.get(inputPonto.value);
+    if (!grupo) return;
+    selecionarTerminal(grupo);
+  });
+
+  // Preenchimento padrão: Terminal > Terminal Portão > 105802 — o mesmo
+  // letreiro que cliente.js já usa como padrão no boot (idParadaAtual), só
+  // pra refletir isso no seletor sem reiniciar o cliente à toa.
+  selectTipo.value = "terminal";
+  popularPontos("terminal");
+
+  const rotuloPortao = Array.from(grupoPorRotulo.keys()).find((r) => r.startsWith("Terminal Portão ("));
+  if (rotuloPortao) {
+    inputPonto.value = rotuloPortao;
+    await selecionarTerminal(grupoPorRotulo.get(rotuloPortao), "105802");
+  }
+}
+
+document.addEventListener("DOMContentLoaded", inicializarSeletorPonto);

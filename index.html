@@ -38,6 +38,30 @@
     </p>
   </div>
 
+  <div class="seletor" id="seletorPonto">
+    <div class="campo">
+      <label for="selectTipo">Estação/terminal</label>
+      <select id="selectTipo">
+        <option value="">Selecione…</option>
+        <option value="estacao">Estação</option>
+        <option value="terminal">Terminal</option>
+      </select>
+    </div>
+
+    <div class="campo">
+      <label for="inputPonto">Busque um ponto</label>
+      <input type="text" id="inputPonto" list="listaPontos" placeholder="Digite o nome do ponto…" autocomplete="off" disabled>
+      <datalist id="listaPontos"></datalist>
+    </div>
+
+    <div class="campo" id="campoLetreiro" hidden>
+      <label for="selectLetreiro">Este terminal tem mais de um letreiro — qual?</label>
+      <select id="selectLetreiro"></select>
+    </div>
+
+    <p class="letreiro-selecionado" id="letreiroSelecionado"></p>
+  </div>
+
   <div class="panel-wrap">
     <div class="panel-sizer" id="panelSizer">
       <div class="panel" id="panel">
@@ -53,7 +77,8 @@
 </main>
 <script src="app.js"></script>
 <script src="linha.js"></script>
-<script src="servidor.js"></script>
-<script src="cliente.js"></script>
+<script src="servidor/database.js"></script>
+<script src="servidor/servidor.js"></script>
+<script src="cliente/cliente.js"></script>
 </body>
 </html>
