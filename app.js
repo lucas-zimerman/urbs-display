@@ -24,7 +24,8 @@ function charToSrc(rawChar) {
   if (ch === "Ú") return "font/u1.png";
   if (ch === "Ç") return "font/cecedilha.png";
   if (ch === '"' || ch === "'") return "font/aspas.png";
-  if (ch === "!" || ch === "(" || ch === ")" || ch === "?" || ch === "~") return `font/${ch}.png`;
+  if (ch === "~") return "font/tilde.png";
+  if (ch === "!" || ch === "(" || ch === ")" || ch === "?") return `font/${ch}.png`;
   if (ch === "/") return "font/bar.png";
   if (/^[A-Z0-9]$/.test(ch)) return `font/${ch}.png`;
   return null;

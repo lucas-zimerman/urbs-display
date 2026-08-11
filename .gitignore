@@ -1,6 +1,13 @@
 # Fonte bruta usada pra extrair snd/*.opus, não faz parte do projeto (~60MB, não é nosso pra distribuir)
 youtube/
 
+# Dado bruto de GPS (breadcrumb de veículo) e o GTFS extraído — só servem de
+# insumo pro script scripts/gerar_agenda_por_letreiro.js, que gera o dado
+# pequeno de verdade (database/live/gtfs/<NUM>.json). São grandes demais pro
+# repo (213MB e ~80MB) e fáceis de re-obter (ver conversa/README de onde vieram).
+database/live/*_veiculos.json
+database/live/gtfs_source/
+
 # Configurações locais do Claude Code (específicas desta máquina)
 .claude/settings.local.json
 

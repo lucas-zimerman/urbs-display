@@ -1,19 +1,21 @@
 // Camada de acesso aos dados reais da URBS (database/live/*.json — export
-// aberto de linhas.json e pontosLinha.json). Cuida só de carregar e filtrar;
+// aberto de linhas.json e pontosLinha.json, mais os arquivos pré-computados
+// por scripts/gerar_*.js a partir deles). Cuida só de carregar e filtrar;
 // quem decide o que fazer com o resultado é quem chama (servidor.js, app.js).
 //
 // Os arquivos têm prefixo de data no nome (export do dia); ao trocar por um
-// dump mais novo, só atualizar ARQUIVOS abaixo.
+// dump mais novo, só atualizar ARQUIVOS abaixo e rerodar os scripts em
+// scripts/ (pontosLinha.json em si não é mais buscado pelo navegador, só
+// pelos scripts offline — ver terminais.json/pontos_index.json/terminais/
+// e rotas/ abaixo).
 const BASE_URL = "database/live/";
 const ARQUIVOS = {
   linhas: "2026_08_09_linhas.json",
-  pontos: "2026_08_09_pontosLinha.json",
   veiculos: "2026_08_09_tabelaVeiculo.json",
   tabelaLinha: "2026_08_09_tabelaLinha.json",
 };
 
 let _linhas = null; // Promise<array>, cacheada após o primeiro carregarLinhas()
-let _pontos = null;
 let _veiculos = null;
 let _tabelaLinha = null;
 
@@ -24,14 +26,45 @@ function carregarJSON(nomeArquivo) {
   });
 }
 
+// Carrega database/live/<pasta>/<chave>.json, cacheado por chave — usado
+// pelos dados particionados por letreiro (gtfs/, pontos/) em vez do arquivo
+// inteiro da cidade, já que cada letreiro só precisa do seu próprio arquivo.
+// null (arquivo não existe, 404) é resultado esperado pra quem chama tratar,
+// não um erro — nem todo NUM tem arquivo em toda pasta particionada.
+function carregarPorLetreiro(pasta, chave, cache) {
+  if (!cache.has(chave)) {
+    const promise = fetch(`${BASE_URL}${pasta}/${chave}.json`)
+      .then((resp) => (resp.ok ? resp.json() : null))
+      .catch(() => null);
+    cache.set(chave, promise);
+  }
+  return cache.get(chave);
+}
+
+// Horário real por letreiro, gerado offline por scripts/gerar_agenda_por_letreiro.js
+// a partir do GTFS de https://github.com/benaytms/urbs-gtfs (stop_id do GTFS ==
+// NUM daqui). Um arquivo pequeno por parada (database/live/gtfs/<NUM>.json) em
+// vez do GTFS bruto inteiro (stop_times.txt sozinho tem 67MB pra cidade toda).
+const _agendasGtfsPorLetreiro = new Map(); // Map<num, Promise<{linhas:{...}}|null>>
+
+function carregarAgendaGtfsDoLetreiro(num) {
+  return carregarPorLetreiro("gtfs", num, _agendasGtfsPorLetreiro);
+}
+
+// Linhas de um letreiro específico, gerado offline por
+// scripts/gerar_pontos_por_letreiro.js a partir de pontosLinha.json +
+// linhas.json (mesmo join que obterLinhasDoLetreiro fazia em runtime) — um
+// arquivo pequeno por NUM em vez de filtrar os 17624 registros de
+// pontosLinha.json (4.2MB) toda vez que um letreiro é selecionado.
+const _pontosPorLetreiro = new Map(); // Map<num, Promise<Array|null>>
+
+function carregarPontosDoLetreiro(num) {
+  return carregarPorLetreiro("pontos", num, _pontosPorLetreiro);
+}
+
 function carregarLinhas() {
   if (!_linhas) _linhas = carregarJSON(ARQUIVOS.linhas);
   return _linhas;
-}
-
-function carregarPontos() {
-  if (!_pontos) _pontos = carregarJSON(ARQUIVOS.pontos);
-  return _pontos;
 }
 
 function carregarVeiculos() {
@@ -44,131 +77,53 @@ function carregarTabelaLinha() {
   return _tabelaLinha;
 }
 
-// O campo NOME de um ponto costuma vir como "<nome do local>-<linha>-<destino>..."
-// (ex: "Terminal Portão-202-Cabral/C.Raso-203-..."). Isso extrai só o nome do
-// local. Pontos sem esse sufixo (ex: "Estação Tubo Paiol") voltam intactos.
-function nomeBaseDoPonto(nome) {
-  return nome.split(/\s*-\s*\d/)[0].trim();
-}
+// Estações/terminais, letreiros de cada terminal e rota de cada linha —
+// pré-computados offline por scripts/gerar_listas_globais.js a partir de
+// pontosLinha.json (4.2MB, 17624 registros brutos da cidade toda), pra o
+// navegador nunca precisar buscar/varrer esse arquivo: só o resultado
+// pronto, do tamanho da consulta específica.
 
-// Um NUM/GRUPO pode ter o campo NOME levemente diferente entre registros
-// (cada linha que passa ali grava o seu); usamos o mais frequente como nome
-// de exibição, em vez de simplesmente o primeiro que aparecer.
-function nomeMaisComum(mapaContagem) {
-  let melhor = "";
-  let max = -1;
-  mapaContagem.forEach((contagem, nome) => {
-    if (contagem > max) {
-      max = contagem;
-      melhor = nome;
-    }
-  });
-  return melhor;
-}
+let _terminais = null; // Promise<array> — database/live/terminais.json
+let _pontosIndex = null; // Promise<array> — database/live/pontos_index.json
+const _letreirosPorTerminal = new Map(); // Map<grupo, Promise<Array|null>> — database/live/terminais/<GRUPO>.json
+const _rotasPorLinha = new Map(); // Map<numeroLinha, Promise<{[sentido]: Array}|null>> — database/live/rotas/<numeroLinha>.json
 
 // Estações/terminais: pontos que têm GRUPO (cluster de 1+ plataformas na
 // mesma localidade — ex: Terminal Portão tem 2, uma por sentido). A maioria
 // das paradas simples de rua não tem GRUPO e não entra aqui — essas ficam
 // só em listarTodosOsPontos().
-async function listarTerminais() {
-  const pontos = await carregarPontos();
-  const porGrupo = new Map();
-
-  pontos.forEach((p) => {
-    if (!p.GRUPO) return;
-    if (!porGrupo.has(p.GRUPO)) {
-      porGrupo.set(p.GRUPO, { grupo: p.GRUPO, nomes: new Map(), nums: new Set() });
-    }
-    const entrada = porGrupo.get(p.GRUPO);
-    entrada.nums.add(p.NUM);
-    const base = nomeBaseDoPonto(p.NOME);
-    entrada.nomes.set(base, (entrada.nomes.get(base) || 0) + 1);
-  });
-
-  return Array.from(porGrupo.values())
-    .map((entrada) => ({
-      grupo: entrada.grupo,
-      nome: nomeMaisComum(entrada.nomes),
-      letreiros: Array.from(entrada.nums),
-    }))
-    .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+function listarTerminais() {
+  if (!_terminais) _terminais = carregarJSON("terminais.json");
+  return _terminais;
 }
 
 // Todos os pontos individuais (por NUM), pra autocomplete — inclui tanto os
 // que fazem parte de um terminal quanto paradas simples de rua.
-async function listarTodosOsPontos() {
-  const pontos = await carregarPontos();
-  const porNum = new Map();
-
-  pontos.forEach((p) => {
-    if (!porNum.has(p.NUM)) {
-      porNum.set(p.NUM, { num: p.NUM, nomes: new Map(), lat: p.LAT, lon: p.LON });
-    }
-    const entrada = porNum.get(p.NUM);
-    const base = nomeBaseDoPonto(p.NOME);
-    entrada.nomes.set(base, (entrada.nomes.get(base) || 0) + 1);
-  });
-
-  return Array.from(porNum.values())
-    .map((entrada) => ({
-      num: entrada.num,
-      nome: nomeMaisComum(entrada.nomes),
-      lat: entrada.lat,
-      lon: entrada.lon,
-    }))
-    .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+function listarTodosOsPontos() {
+  if (!_pontosIndex) _pontosIndex = carregarJSON("pontos_index.json");
+  return _pontosIndex;
 }
 
 // Os letreiros (NUM) de um terminal (GRUPO) — é essa lista que decide se o
 // app.js precisa mostrar o 4º campo (mais de um letreiro) ou não.
 async function obterLetreirosDoTerminal(grupo) {
-  const pontos = await carregarPontos();
-  const doGrupo = pontos.filter((p) => p.GRUPO === grupo);
-  const porNum = new Map();
-
-  doGrupo.forEach((p) => {
-    if (!porNum.has(p.NUM)) {
-      porNum.set(p.NUM, { num: p.NUM, nome: `${nomeBaseDoPonto(p.NOME)} (${p.NUM})`, linhas: new Set() });
-    }
-    porNum.get(p.NUM).linhas.add(p.COD);
-  });
-
-  return Array.from(porNum.values()).map((e) => ({
-    num: e.num,
-    nome: e.nome,
-    linhas: Array.from(e.linhas).sort(),
-  }));
+  const doArquivo = await carregarPorLetreiro("terminais", grupo, _letreirosPorTerminal);
+  return doArquivo || [];
 }
 
 // Linhas + sentido mostrados num letreiro (NUM) específico. Uma mesma linha
 // pode aparecer mais de uma vez com SENTIDO diferente — linhas circulares
 // (ex: 502) passam pela mesma plataforma em pontos diferentes da volta.
 async function obterLinhasDoLetreiro(num) {
-  const [pontos, linhas] = await Promise.all([carregarPontos(), carregarLinhas()]);
-  const porCod = new Map(linhas.map((l) => [l.COD, l]));
-
-  // Alguns COD em pontosLinha.json não existem mais em linhas.json (linha
-  // desativada/renumerada, mas a referência ficou no dado de parada) — sem
-  // nome oficial pra mostrar, essas ficam de fora.
-  return pontos
-    .filter((p) => p.NUM === num && porCod.has(p.COD))
-    .map((p) => ({
-      numeroLinha: p.COD,
-      nomeLinha: porCod.get(p.COD).NOME,
-      sentido: p.SENTIDO,
-      seq: Number(p.SEQ),
-    }))
-    .sort((a, b) => a.numeroLinha.localeCompare(b.numeroLinha) || a.seq - b.seq);
+  const doArquivo = await carregarPontosDoLetreiro(num);
+  return doArquivo || [];
 }
 
 // Paradas (em ordem) de uma linha, num sentido específico — a base pra
 // montar um RotaLinha (linha.js) com dado real em vez do mock manual.
 async function obterParadasDaLinha(numeroLinha, sentido) {
-  const pontos = await carregarPontos();
-  return pontos
-    .filter((p) => p.COD === numeroLinha && p.SENTIDO === sentido)
-    .sort((a, b) => Number(a.SEQ) - Number(b.SEQ))
-    .map((p) => ({ num: p.NUM, nome: nomeBaseDoPonto(p.NOME), lat: p.LAT, lon: p.LON }));
+  const doArquivo = await carregarPorLetreiro("rotas", numeroLinha, _rotasPorLinha);
+  return doArquivo?.[sentido] || [];
 }
 
 // Em quais tipos de dia uma linha roda, segundo tabelaLinha.json: "1" dia
@@ -198,11 +153,10 @@ async function obterHorariosOperacaoLinha(numeroLinha, dia) {
     .sort((a, b) => a - b);
 }
 
-// Frequência estimada (minutos entre veículos), a partir dos horários
-// programados em tabelaVeiculo.json pra essa linha nesse ponto. Nem toda
-// combinação linha+ponto tem esse dado — devolve null quando não tem.
-async function obterFrequenciaLinha(numeroLinha, numPonto) {
-  const veiculos = await carregarVeiculos();
+// Frequência estimada (minutos entre veículos) a partir dos horários de um
+// linha+ponto em tabelaVeiculo.json: converte HORARIO ("HH:MM") em minutos
+// e tira a média dos intervalos entre passagens consecutivas.
+function calcularFrequenciaNoPonto(veiculos, numeroLinha, numPonto) {
   const horarios = veiculos
     .filter((v) => v.COD_LINHA === numeroLinha && v.COD_PONTO === numPonto)
     .map((v) => v.HORARIO)
@@ -224,4 +178,28 @@ async function obterFrequenciaLinha(numeroLinha, numPonto) {
   if (gaps.length === 0) return null;
 
   return Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length);
+}
+
+// tabelaVeiculo.json só tem horário cadastrado nuns poucos pontos "âncora"
+// por linha, não na rota inteira (ex: a 203 tem dado em 8 pontos espalhados
+// pela cidade, mas não em toda parada que ela passa) — sem esse fallback,
+// qualquer ponto fora dessas âncoras cai direto no intervalo genérico
+// (GAPS_PADRAO_MIN, em servidor/servidor.js), que não tem nenhuma relação
+// com a frequência real daquela linha. A frequência varia pouco de ponto
+// pra ponto ao longo da mesma linha (conferido contra dados reais: a 203
+// fica entre 15-16min em todos os 8 pontos com dado), então a frequência de
+// qualquer outro ponto da mesma linha é uma aproximação bem melhor que nada.
+async function obterFrequenciaLinha(numeroLinha, numPonto) {
+  const veiculos = await carregarVeiculos();
+
+  const doPontoExato = calcularFrequenciaNoPonto(veiculos, numeroLinha, numPonto);
+  if (doPontoExato !== null) return doPontoExato;
+
+  const outrosPontos = new Set(veiculos.filter((v) => v.COD_LINHA === numeroLinha).map((v) => v.COD_PONTO));
+  for (const outroPonto of outrosPontos) {
+    const freq = calcularFrequenciaNoPonto(veiculos, numeroLinha, outroPonto);
+    if (freq !== null) return freq;
+  }
+
+  return null;
 }

@@ -6,7 +6,12 @@
 // linhas, paradas e frequência reais daquele letreiro, em vez de um pool
 // fixo de 4 linhas inventadas.
 
-const QTD_CHEGADAS_POR_LETREIRO = 20;
+// Janela de tempo pré-computada pra agenda de cada letreiro: cada linha
+// recebe uma chegada a cada frequência sua dentro desse horizonte, não uma
+// quantidade fixa de chegadas — senão uma linha de frequência baixa (ex: um
+// fallback de 2min) sozinha preenche todas as vagas de uma contagem fixa e
+// as linhas de frequência real mais alta (ex: 32min) nunca aparecem.
+const HORIZONTE_AGENDA_MIN = 240;
 // Usado quando não há frequência real (obterFrequenciaLinha) pra aquela
 // linha+letreiro — um ciclo de intervalos "misturados", igual antes.
 const GAPS_PADRAO_MIN = [2, 5, 3, 8, 4, 6, 2, 7, 3, 5, 9, 4];
@@ -28,15 +33,21 @@ function AvancarMinutoServidor() {
   avancoManualMs += 60000;
 }
 
-// Duas entradas com a mesma linha+sentido só existem por causa de variantes
-// de itinerário nos dados brutos (ex: X49 aparece 2x com o mesmo sentido em
-// Terminal Portão) — pra montar a agenda só precisamos de uma.
-function dedupeLinhasPorSentido(linhas) {
+// Uma linha circular (ex: 602 CIRCULAR SUL) passa fisicamente pelo mesmo
+// letreiro uma vez por volta, mas aparece em pontosLinha.json com um SENTIDO
+// diferente por trecho do circuito (ex: 6 variantes em Terminal Portão) —
+// são rótulos administrativos do trajeto, não passagens repetidas do ônibus.
+// Sem dedupar por numeroLinha, cada uma dessas 6 vira uma entrada própria em
+// construirAgenda, todas com a mesma frequência real (~32min pra 602 no
+// grupo 14499), e o relógio acumulado compartilhado leva 6 saltos de ~30min
+// seguidos só nessa linha — empurrando as outras linhas do letreiro pra
+// muito mais tarde na fila. Mantém o sentido de menor seq (o mais cedo no
+// trajeto a partir deste letreiro) como representante pra buscar a rota depois.
+function umaEntradaPorLinha(linhas) {
   const vistos = new Set();
   return linhas.filter((l) => {
-    const chave = `${l.numeroLinha}|${l.sentido}`;
-    if (vistos.has(chave)) return false;
-    vistos.add(chave);
+    if (vistos.has(l.numeroLinha)) return false;
+    vistos.add(l.numeroLinha);
     return true;
   });
 }
@@ -48,6 +59,18 @@ function diaDeHojeURBS() {
   if (dia === 0) return "3";
   if (dia === 6) return "2";
   return "1";
+}
+
+// service_id do GTFS (calendar.txt) equivalente a cada código de diaDeHojeURBS.
+const SERVICE_ID_GTFS_POR_DIA = { 1: "dias_uteis", 2: "sabado", 3: "domingo" };
+
+// "HH:MM:SS" -> segundos desde meia-noite. GTFS permite HH >= 24 pra viagem
+// que começa antes da meia-noite e continua depois (ainda no mesmo
+// service_id do dia anterior) — não precisa tratar esse caso à parte aqui,
+// só não fazer módulo 24h.
+function paraSegundosDoDia(hhmmss) {
+  const [hh, mm, ss] = hhmmss.split(":").map(Number);
+  return hh * 3600 + mm * 60 + ss;
 }
 
 // Sem viagem cadastrada num raio de 90min do horário atual, considera que a
@@ -97,32 +120,56 @@ function obterAgendaDoLetreiro(num) {
   return agendasPorLetreiro.get(num);
 }
 
-// Agenda simulada pra um letreiro: cicla pelas linhas+sentido reais que
-// passam ali (servidor/database.js), usando a frequência real quando
-// disponível (obterFrequenciaLinha) e o intervalo padrão como fallback pras
-// combinações sem esse dado (nem toda linha+ponto tem horário cadastrado).
+// Agenda pra um letreiro. Duas fontes, por linha:
+// 1) Horário real do GTFS (database/live/gtfs/<num>.json, gerado por
+//    scripts/gerar_agenda_por_letreiro.js) quando aquela linha+letreiro+dia
+//    tem viagem cadastrada — não é estimativa, é o horário programado de
+//    verdade, convertido pra "minutos a partir de agora".
+// 2) Frequência estimada (obterFrequenciaLinha, ou o intervalo padrão como
+//    fallback) só pras linhas sem cobertura no GTFS naquele letreiro — o
+//    GTFS de terceiros não cobre 100% dos pontos de pontosLinha.json.
+// O board final é a fila real de chegada, todas as linhas juntas ordenadas
+// por horário — não uma linha por turno de rodízio.
 async function construirAgenda(num) {
-  const doLetreiro = dedupeLinhasPorSentido(await obterLinhasDoLetreiro(num));
-  const linhas = await filtrarLinhasDisponiveisAgora(doLetreiro);
-  if (linhas.length === 0) return [];
+  const doLetreiro = umaEntradaPorLinha(await obterLinhasDoLetreiro(num));
+  if (doLetreiro.length === 0) return [];
 
-  const frequencias = await Promise.all(linhas.map((l) => obterFrequenciaLinha(l.numeroLinha, num)));
+  const agendaGtfs = await carregarAgendaGtfsDoLetreiro(num);
+  const servico = SERVICE_ID_GTFS_POR_DIA[diaDeHojeURBS()];
+  const agoraSeg = horaAtualEmMinutos() * 60;
 
-  let acumuladoMin = 0;
-  const agenda = [];
-  for (let i = 0; i < QTD_CHEGADAS_POR_LETREIRO; i++) {
-    const idx = i % linhas.length;
-    const linha = linhas[idx];
-    const gap = frequencias[idx] || GAPS_PADRAO_MIN[i % GAPS_PADRAO_MIN.length];
-    acumuladoMin += gap;
-    agenda.push({
-      numeroLinha: linha.numeroLinha,
-      nomeLinha: linha.nomeLinha,
-      sentido: linha.sentido,
-      horarioMin: acumuladoMin,
+  const comGtfs = [];
+  const semGtfs = [];
+  doLetreiro.forEach((linha) => {
+    const horarios = agendaGtfs?.linhas?.[linha.numeroLinha]?.[servico];
+    (horarios && horarios.length > 0 ? comGtfs : semGtfs).push(linha);
+  });
+
+  const candidatos = [];
+
+  comGtfs.forEach((linha) => {
+    const horarios = agendaGtfs.linhas[linha.numeroLinha][servico];
+    horarios.forEach((hhmmss) => {
+      const seg = paraSegundosDoDia(hhmmss);
+      let horarioMin = Math.round((seg - agoraSeg) / 60);
+      if (horarioMin < 0) horarioMin += 1440; // já passou hoje, mesmo horário volta amanhã
+      candidatos.push({ numeroLinha: linha.numeroLinha, nomeLinha: linha.nomeLinha, sentido: linha.sentido, horarioMin });
+    });
+  });
+
+  const semGtfsDisponiveis = await filtrarLinhasDisponiveisAgora(semGtfs);
+  if (semGtfsDisponiveis.length > 0) {
+    const frequencias = await Promise.all(semGtfsDisponiveis.map((l) => obterFrequenciaLinha(l.numeroLinha, num)));
+    semGtfsDisponiveis.forEach((linha, idx) => {
+      const freq = frequencias[idx] || GAPS_PADRAO_MIN[idx % GAPS_PADRAO_MIN.length];
+      for (let horarioMin = freq; horarioMin <= HORIZONTE_AGENDA_MIN; horarioMin += freq) {
+        candidatos.push({ numeroLinha: linha.numeroLinha, nomeLinha: linha.nomeLinha, sentido: linha.sentido, horarioMin });
+      }
     });
   }
-  return agenda;
+
+  candidatos.sort((a, b) => a.horarioMin - b.horarioMin);
+  return candidatos;
 }
 
 /**

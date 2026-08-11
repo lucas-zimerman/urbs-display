@@ -1,5 +1,4 @@
 const MENSAGEM_INICIAL = "URBS - V1.0";
-const TEMPO_MENSAGEM_INICIAL_MS = 5000;
 const INTERVALO_DESCONTO_MS = 60 * 1000; // a cada minuto, desconta 1 do tempo de chegada
 const INTERVALO_SCROLL_MS = 120; // passo do scroll dos nomes que não cabem na tela
 
@@ -32,7 +31,8 @@ let idIntervaloScroll = null;
 // Chamado uma vez no boot (sem argumento, usa o idParadaAtual padrão) e de
 // novo sempre que o usuário troca de letreiro no seletor (com o novo NUM) —
 // nesse caso reseta tudo: para os timers antigos, mostra a mensagem inicial
-// de novo e recarrega a partir do letreiro novo.
+// e já dispara a busca dos dados em paralelo (sem esperar um tempo fixo) —
+// assim que a busca volta, o painel troca direto pro letreiro de verdade.
 function ligar(numLetreiro) {
   geracaoAtual += 1;
   const minhaGeracao = geracaoAtual;
@@ -50,15 +50,11 @@ function ligar(numLetreiro) {
 
   renderPanelText([MENSAGEM_INICIAL]);
 
-  setTimeout(() => {
-    if (minhaGeracao !== geracaoAtual) return; // ligar() rodou de novo antes disso disparar
-
-    CarregarProximasLinhas().then(() => {
-      if (minhaGeracao !== geracaoAtual) return;
-      idIntervaloDesconto = setInterval(DescontaTempoChegada, INTERVALO_DESCONTO_MS);
-      idIntervaloScroll = setInterval(AvancaScroll, INTERVALO_SCROLL_MS);
-    });
-  }, TEMPO_MENSAGEM_INICIAL_MS);
+  CarregarProximasLinhas().then(() => {
+    if (minhaGeracao !== geracaoAtual) return; // ligar() rodou de novo antes disso voltar
+    idIntervaloDesconto = setInterval(DescontaTempoChegada, INTERVALO_DESCONTO_MS);
+    idIntervaloScroll = setInterval(AvancaScroll, INTERVALO_SCROLL_MS);
+  });
 }
 
 async function CarregarProximasLinhas() {
