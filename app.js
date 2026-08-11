@@ -17,7 +17,7 @@ function charToSrc(rawChar) {
   if (ch === ".") return "font/dot.png";
   if (ch === "-") return "font/minus.png";
   if (ch === "|") return "font/bar.png";
-  if (ch === "Ã" || ch === "Á") return "font/a_acento.png";
+  if (ch === "Ã" || ch === "Á" || ch === "Â") return "font/a_acento.png";
   if (ch === "É" || ch === "Ê") return "font/e_tio.png";
   if (ch === "Í") return "font/i1.png";
   if (ch === "Ó") return "font/o1.png";

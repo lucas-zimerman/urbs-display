@@ -213,6 +213,83 @@ async function mostrarAnuncioChegada(linhaChegada) {
   AtualizaTela();
 }
 
+// Nomes de parada vêm como "Rua Tal, 123 - Bairro" (nomeBaseDoPonto, em
+// servidor/database.js). Numa mesma rua o ônibus passa por várias paradas
+// seguidas que só mudam o número (ex: "R. Eça de Queiroz, 921 - Ahú" depois
+// "R. Eça de Queiroz, 940 - Ahú") — sem agrupar, isso repete a rua inteira
+// várias vezes seguidas na tela por nada. Só agrupa paradas *consecutivas*
+// (mesma rua, mesmo sufixo depois do número) pra não misturar trechos
+// distantes da rota que por acaso passem pela mesma rua duas vezes.
+const RE_PARADA_COM_NUMERO = /^(.*?),\s*(\d+)(\s*-.*)?$/;
+
+// "Estação Tubo X" é o nome de toda estação da BRT — repetir "Estação Tubo"
+// em toda parada do letreiro não ajuda em nada, só ocupa espaço; o nome do
+// local (X) já basta. \s+ (em vez de espaço fixo) porque o dado real vem com
+// espaçamento inconsistente (ex: "Estação  Tubo Solar.").
+const RE_PREFIXO_ESTACAO_TUBO = /^Esta[cç][aã]o\s+Tubo\s+/i;
+
+// Abreviações de tipo de logradouro variam parada a parada pra uma mesma rua
+// (ex: linha 611 tem "R. Carlos Dietzsch" e "Rua Carlos Dietzsch" no mesmo
+// trecho) — sem normalizar, isso quebra o agrupamento no meio da sequência.
+const ABREVIACOES_LOGRADOURO = [
+  [/^R\.\s*/, "RUA "],
+  [/^AV\.\s*/, "AVENIDA "],
+  [/^AL\.\s*/, "ALAMEDA "],
+  [/^TRAV\.\s*/, "TRAVESSA "],
+  [/^(P[CÇ]A\.|PRA[CÇ]A)\s*/, "PRACA "],
+  [/^ESTR\.\s*/, "ESTRADA "],
+];
+
+// Chave de comparação, não de exibição: maiúscula e com a abreviação do
+// logradouro normalizada, pra "R. X" e "Rua X" caírem no mesmo grupo mesmo
+// exibindo cada parada com a grafia que veio no dado original.
+function chaveRua(rua) {
+  const normalizada = rua.replace(/\s+/g, " ").trim().toUpperCase();
+  for (const [re, substituta] of ABREVIACOES_LOGRADOURO) {
+    if (re.test(normalizada)) return normalizada.replace(re, substituta);
+  }
+  return normalizada;
+}
+
+// O sufixo (" - Bairro") também vem com espaçamento inconsistente ao redor
+// do traço (ex: "891 -Portão", "1070 -Portão", "792  - Portão" são o mesmo
+// bairro) — normaliza só pra decidir se agrupa; o texto mostrado nunca inclui o bairro.
+function chaveBairro(sufixo) {
+  return sufixo.replace(/^\s*-\s*/, "").replace(/\s+/g, " ").trim().toUpperCase();
+}
+
+function agruparParadasPorRua(nomes, tempos) {
+  const grupos = [];
+
+  nomes.forEach((nomeOriginal, i) => {
+    const nome = nomeOriginal.replace(RE_PREFIXO_ESTACAO_TUBO, "").replace(/\s+/g, " ").trim();
+    const tempo = tempos[i];
+    const m = nome.match(RE_PARADA_COM_NUMERO);
+    const rua = m ? m[1].replace(/\s+/g, " ").trim() : "";
+    const chaveRuaAtual = m ? chaveRua(rua) : "";
+    const chaveBairroAtual = m ? chaveBairro(m[3] || "") : "";
+    const anterior = grupos[grupos.length - 1];
+
+    if (m && anterior && anterior.chaveRua === chaveRuaAtual && anterior.chaveBairro === chaveBairroAtual) {
+      anterior.numeroFim = m[2];
+      anterior.tempoFim = tempo;
+    } else if (m) {
+      grupos.push({ rua, chaveRua: chaveRuaAtual, chaveBairro: chaveBairroAtual, numeroInicio: m[2], numeroFim: m[2], tempoInicio: tempo, tempoFim: tempo });
+    } else {
+      grupos.push({ nomeCompleto: nome, tempoInicio: tempo, tempoFim: tempo });
+    }
+  });
+
+  // sufixo (bairro) só entra na comparação acima, pra não juntar a mesma rua
+  // em bairros diferentes — no texto mostrado ele não aparece, só rua e número.
+  return grupos.map((g) => ({
+    nome:
+      g.nomeCompleto ??
+      `${g.rua}, ${g.numeroInicio}${g.numeroFim === g.numeroInicio ? "" : `~${g.numeroFim}`}`,
+    tempoTexto: `${g.tempoInicio}${g.tempoFim === g.tempoInicio ? "" : `~${g.tempoFim}`}MIN`,
+  }));
+}
+
 // Pula paradas[0] (tempo 0 — é a parada atual, já passada). Tempo e nome de
 // cada parada seguinte viram uma "coluna" (tempo centralizado sobre o nome);
 // as colunas de todas as paradas viram duas strings do mesmo tamanho —
@@ -220,11 +297,17 @@ async function mostrarAnuncioChegada(linhaChegada) {
 // fiquem alinhadas na tela.
 async function mostrarScrollParadas(cabecalho, rota, minhaGeracao) {
   const nomes = rota.nomeParadas.slice(1);
-  const tempos = rota.tempoChegadaParadasMinuto.slice(1);
+  // tempoChegadaParadasMinuto[i] é o intervalo daquela parada até a anterior
+  // (ver linha.js), não o tempo desde agora — acumula pra virar ETA de
+  // verdade, senão o agrupamento por rua junta dois saltos do ciclo
+  // [1,2,3] (ex: "3~1MIN") em vez do tempo real até o trecho.
+  let acumulado = 0;
+  const tempos = rota.tempoChegadaParadasMinuto.slice(1).map((t) => (acumulado += t));
   if (nomes.length === 0) return;
 
-  const colunas = nomes.map((nome, i) => {
-    const tempoTexto = `${tempos[i]}MIN`;
+  const paradas = agruparParadasPorRua(nomes, tempos);
+
+  const colunas = paradas.map(({ nome, tempoTexto }) => {
     const largura = Math.max(nome.length, tempoTexto.length);
     return {
       nome: nome.padEnd(largura, " "),
