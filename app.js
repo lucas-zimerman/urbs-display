@@ -17,6 +17,15 @@ function charToSrc(rawChar) {
   if (ch === ".") return "font/dot.png";
   if (ch === "-") return "font/minus.png";
   if (ch === "|") return "font/bar.png";
+  if (ch === "Ã" || ch === "Á") return "font/a_acento.png";
+  if (ch === "É" || ch === "Ê") return "font/e_tio.png";
+  if (ch === "Í") return "font/i1.png";
+  if (ch === "Ó") return "font/o1.png";
+  if (ch === "Ú") return "font/u1.png";
+  if (ch === "Ç") return "font/cecedilha.png";
+  if (ch === '"' || ch === "'") return "font/aspas.png";
+  if (ch === "!" || ch === "(" || ch === ")" || ch === "?" || ch === "~") return `font/${ch}.png`;
+  if (ch === "/") return "font/bar.png";
   if (/^[A-Z0-9]$/.test(ch)) return `font/${ch}.png`;
   return null;
 }
