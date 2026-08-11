@@ -182,6 +182,30 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 });
 
+// Deep-link do ponto selecionado, via query string (?tipo=&ponto=&letreiro=)
+// — ponto é o GRUPO (chave de terminais.json), letreiro é o NUM escolhido
+// dentro dele. Fica em sincronia com o seletor nos dois sentidos: lido no
+// boot pra restaurar a seleção, e reescrito (sem empilhar histórico, por
+// isso replaceState) toda vez que o usuário troca algum dos três campos.
+function paramsDaUrl() {
+  const params = new URLSearchParams(location.search);
+  return {
+    tipo: params.get("tipo"),
+    ponto: params.get("ponto"),
+    letreiro: params.get("letreiro"),
+  };
+}
+
+function atualizarUrl({ tipo, ponto, letreiro }) {
+  const params = new URLSearchParams();
+  if (tipo) params.set("tipo", tipo);
+  if (ponto) params.set("ponto", ponto);
+  if (letreiro) params.set("letreiro", letreiro);
+  const query = params.toString();
+  const novaUrl = `${location.pathname}${query ? `?${query}` : ""}${location.hash}`;
+  history.replaceState(null, "", novaUrl);
+}
+
 // Seletor de estação/terminal (servidor/database.js): "Estação/terminal" é
 // só um filtro de tipo (as duas opções fixas), quem lista os pontos de
 // verdade é o campo de busca com autocomplete — filtrado por esse tipo, a
@@ -231,15 +255,18 @@ async function inicializarSeletorPonto() {
     inputPonto.disabled = false;
   }
 
-  // Fecha a escolha: atualiza o texto de status e, se for de fato um
-  // letreiro diferente do que já está no ar, reseta o cliente (cliente.js)
-  // pra esse letreiro novo. A comparação com idParadaAtual evita reiniciar
-  // à toa quando o valor resolvido é igual ao que já estava rodando (ex: o
+  // Fecha a escolha: atualiza o texto de status, reflete os três campos na
+  // URL (paramsDaUrl/atualizarUrl acima) e, se for de fato um letreiro
+  // diferente do que já está no ar, reseta o cliente (cliente.js) pra esse
+  // letreiro novo. A comparação com idParadaAtual evita reiniciar à toa
+  // quando o valor resolvido é igual ao que já estava rodando (ex: o
   // preenchimento padrão abaixo, que aponta pro mesmo letreiro do boot).
-  async function selecionarLetreiro(num) {
+  async function selecionarLetreiro(tipo, grupo, num) {
     const linhas = await obterLinhasDoLetreiro(num);
     const numerosLinha = Array.from(new Set(linhas.map((l) => l.numeroLinha))).sort();
     status.innerHTML = `Letreiro selecionado: <strong>${num}</strong> — linhas: <strong>${numerosLinha.join(", ") || "nenhuma encontrada"}</strong>`;
+
+    atualizarUrl({ tipo, ponto: grupo, letreiro: num });
 
     if (typeof ligar === "function" && num !== idParadaAtual) {
       ligar(num);
@@ -251,12 +278,12 @@ async function inicializarSeletorPonto() {
   // primeiro. Sem isso, o preenchimento padrão abaixo ativaria o primeiro
   // letreiro (chamando ligar) e, um instante depois, corrigiria pro 105802
   // (chamando ligar de novo) — dois reinícios em vez de um.
-  async function selecionarTerminal(grupo, numPreferido) {
+  async function selecionarTerminal(tipo, grupo, numPreferido) {
     const letreiros = await obterLetreirosDoTerminal(grupo);
 
     if (letreiros.length <= 1) {
       campoLetreiro.hidden = true;
-      if (letreiros.length === 1) await selecionarLetreiro(letreiros[0].num);
+      if (letreiros.length === 1) await selecionarLetreiro(tipo, grupo, letreiros[0].num);
       return;
     }
 
@@ -272,31 +299,56 @@ async function inicializarSeletorPonto() {
     const existePreferido = numPreferido && letreiros.some((l) => l.num === numPreferido);
     const numEscolhido = existePreferido ? numPreferido : letreiros[0].num;
     selectLetreiro.value = numEscolhido;
-    await selecionarLetreiro(numEscolhido);
+    await selecionarLetreiro(tipo, grupo, numEscolhido);
   }
 
-  selectTipo.addEventListener("change", () => popularPontos(selectTipo.value));
+  selectTipo.addEventListener("change", () => {
+    popularPontos(selectTipo.value);
+    atualizarUrl({ tipo: selectTipo.value }); // troca de tipo invalida o ponto/letreiro escolhido antes
+  });
 
   selectLetreiro.addEventListener("change", () => {
-    selecionarLetreiro(selectLetreiro.value);
+    const grupo = grupoPorRotulo.get(inputPonto.value);
+    selecionarLetreiro(selectTipo.value, grupo, selectLetreiro.value);
   });
 
   inputPonto.addEventListener("change", () => {
     const grupo = grupoPorRotulo.get(inputPonto.value);
     if (!grupo) return;
-    selecionarTerminal(grupo);
+    selecionarTerminal(selectTipo.value, grupo);
   });
+
+  // Tenta restaurar a seleção a partir da URL (?tipo=&ponto=&letreiro=): só
+  // usa se tipo for um valor válido e ponto (GRUPO) existir de fato na lista
+  // filtrada por esse tipo — senão cai no padrão abaixo, que por sua vez
+  // reescreve a URL com os valores reais que acabou usando (efetivamente
+  // "redireciona" pra longe de um deep-link inválido).
+  const { tipo: tipoUrl, ponto: pontoUrl, letreiro: letreiroUrl } = paramsDaUrl();
+  let restauradoDaUrl = false;
+
+  if (tipoUrl === "terminal" || tipoUrl === "estacao") {
+    selectTipo.value = tipoUrl;
+    popularPontos(tipoUrl);
+    const rotulo = Array.from(grupoPorRotulo.entries()).find(([, grupo]) => grupo === pontoUrl)?.[0];
+    if (rotulo) {
+      inputPonto.value = rotulo;
+      await selecionarTerminal(tipoUrl, pontoUrl, letreiroUrl);
+      restauradoDaUrl = true;
+    }
+  }
 
   // Preenchimento padrão: Terminal > Terminal Portão > 105802 — o mesmo
   // letreiro que cliente.js já usa como padrão no boot (idParadaAtual), só
   // pra refletir isso no seletor sem reiniciar o cliente à toa.
-  selectTipo.value = "terminal";
-  popularPontos("terminal");
+  if (!restauradoDaUrl) {
+    selectTipo.value = "terminal";
+    popularPontos("terminal");
 
-  const rotuloPortao = Array.from(grupoPorRotulo.keys()).find((r) => r.startsWith("Terminal Portão ("));
-  if (rotuloPortao) {
-    inputPonto.value = rotuloPortao;
-    await selecionarTerminal(grupoPorRotulo.get(rotuloPortao), "105802");
+    const rotuloPortao = Array.from(grupoPorRotulo.keys()).find((r) => r.startsWith("Terminal Portão ("));
+    if (rotuloPortao) {
+      inputPonto.value = rotuloPortao;
+      await selecionarTerminal("terminal", grupoPorRotulo.get(rotuloPortao), "105802");
+    }
   }
 }
 
