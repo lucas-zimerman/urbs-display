@@ -28,6 +28,34 @@ let geracaoAtual = 0;
 let idIntervaloDesconto = null;
 let idIntervaloScroll = null;
 
+const soundMap = {
+  "020": "020",
+  "021": "020",
+  "022": "022",
+  "023": "022",
+  "030": "030",
+  "050": "050",
+  "203": "203",
+  "220": "220",
+  "250": "250",
+  "303": "303",
+  "304": "304",
+  "307": "307",
+  "350": "350",
+  "505": "505",
+  "502": "502",
+  "602": "502",
+  "507": "022",
+  "508": "022",
+  "603": "603",
+  "607": "607",
+  "H02": "H02",
+  "F02": "F02",
+  "C01": "C01",
+  "X08": "603"
+};
+
+
 // Chamado uma vez no boot (sem argumento, usa o idParadaAtual padrão) e de
 // novo sempre que o usuário troca de letreiro no seletor (com o novo NUM) —
 // nesse caso reseta tudo: para os timers antigos, mostra a mensagem inicial
@@ -155,9 +183,8 @@ function tocarSomChegada(numeroLinha) {
   if (!somHabilitado) return;
 
   const numero = numeroLinha.padStart(3, "0").slice(-3);
-  let src = "snd/others.opus";
-  if (numero === "502") src = "snd/502.opus";
-  else if (numero === "203") src = "snd/203.opus";
+  const src = soundMap[numero] ? `snd/${soundMap[numero]}.opus` : 'snd/others.opus';
+
 
   // .play() rejeita se o navegador bloquear autoplay sem interação prévia
   // do usuário nesta página; ignora em silêncio nesse caso.
@@ -247,13 +274,6 @@ function chaveRua(rua) {
   return normalizada;
 }
 
-// O sufixo (" - Bairro") também vem com espaçamento inconsistente ao redor
-// do traço (ex: "891 -Portão", "1070 -Portão", "792  - Portão" são o mesmo
-// bairro) — normaliza só pra decidir se agrupa; o texto mostrado nunca inclui o bairro.
-function chaveBairro(sufixo) {
-  return sufixo.replace(/^\s*-\s*/, "").replace(/\s+/g, " ").trim().toUpperCase();
-}
-
 function agruparParadasPorRua(nomes, tempos) {
   const grupos = [];
 
@@ -263,21 +283,26 @@ function agruparParadasPorRua(nomes, tempos) {
     const m = nome.match(RE_PARADA_COM_NUMERO);
     const rua = m ? m[1].replace(/\s+/g, " ").trim() : "";
     const chaveRuaAtual = m ? chaveRua(rua) : "";
-    const chaveBairroAtual = m ? chaveBairro(m[3] || "") : "";
     const anterior = grupos[grupos.length - 1];
 
-    if (m && anterior && anterior.chaveRua === chaveRuaAtual && anterior.chaveBairro === chaveBairroAtual) {
+    // Não compara o bairro do sufixo: uma mesma avenida longa (ex: Av. Pres.
+    // Kennedy, Av. Mal. Mascarenhas de Morais) atravessa vários bairros
+    // diferentes parada a parada, então exigir o mesmo bairro quebrava o
+    // agrupamento no meio da sequência (ex: linha 050 no ponto 105811 e
+    // linha 030 no ponto 105907, ambas com bairro trocando a cada parada).
+    // Como só compara com a parada anterior (nunca com grupos distantes),
+    // não precisa do bairro pra evitar juntar ocorrências não-relacionadas
+    // da mesma rua em partes bem diferentes da rota.
+    if (m && anterior && anterior.chaveRua === chaveRuaAtual) {
       anterior.numeroFim = m[2];
       anterior.tempoFim = tempo;
     } else if (m) {
-      grupos.push({ rua, chaveRua: chaveRuaAtual, chaveBairro: chaveBairroAtual, numeroInicio: m[2], numeroFim: m[2], tempoInicio: tempo, tempoFim: tempo });
+      grupos.push({ rua, chaveRua: chaveRuaAtual, numeroInicio: m[2], numeroFim: m[2], tempoInicio: tempo, tempoFim: tempo });
     } else {
       grupos.push({ nomeCompleto: nome, tempoInicio: tempo, tempoFim: tempo });
     }
   });
 
-  // sufixo (bairro) só entra na comparação acima, pra não juntar a mesma rua
-  // em bairros diferentes — no texto mostrado ele não aparece, só rua e número.
   return grupos.map((g) => ({
     nome:
       g.nomeCompleto ??
